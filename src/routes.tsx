@@ -1,9 +1,10 @@
 import { lazy, Suspense } from 'react';
-import { Routes, Route, Outlet } from 'react-router-dom';
+import { Routes, Route, Outlet, useLocation } from 'react-router-dom';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import BottomTabs from '@/components/BottomTabs';
 import NotFound from '@/pages/NotFound';
+import { AnimatePresence, motion } from 'framer-motion';
 
 // Eager-load high-traffic pages
 import HomePage from '@/pages/HomePage';
@@ -20,6 +21,7 @@ const DiagnosticsPage = lazy(() => import('@/pages/DiagnosticsPage'));
 const AdminPage = lazy(() => import('@/pages/AdminPage'));
 
 const PageLayout = () => {
+  const location = useLocation();
   return (
     <div className="min-h-screen bg-gradient-sky relative">
       {/* Decorative background accents */}
@@ -32,7 +34,17 @@ const PageLayout = () => {
 
       <main className="px-4 pb-24 sm:pb-16">
         <div className="max-w-4xl mx-auto">
-          <Outlet />
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={location.pathname}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.28, ease: 'easeOut' }}
+            >
+              <Outlet />
+            </motion.div>
+          </AnimatePresence>
         </div>
       </main>
 
