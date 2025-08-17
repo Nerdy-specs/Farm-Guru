@@ -1,6 +1,18 @@
 # FarmGuru - AI-Powered Agricultural Assistant
 
-FarmGuru is an intelligent agricultural assistant that helps farmers make informed decisions through AI-powered crop advice, disease detection, weather insights, and government scheme information. Available in both English and Hindi.
+## 🔑 LLM Setup (Hugging Face Inference API)
+
+- Set `HF_API_KEY` in your backend `.env` to enable Hugging Face Inference API with `mistralai/Mixtral-8x7B-Instruct`.
+- Create/Manage your token at: https://huggingface.co/settings/tokens
+- When `HF_API_KEY` is not set, FarmGuru uses a deterministic fallback: short 1–2 sentence answer, fixed confidence (0.5), simple actions, and retrieved docs as sources.
+
+Example backend `.env` values:
+```
+HF_API_KEY=hf_...your_token...
+DATABASE_URL=...
+SUPABASE_URL=...
+SUPABASE_ANON_KEY=...
+```
 
 ## 🌾 Features
 
@@ -55,7 +67,7 @@ pip install -r requirements.txt
 3. **Setup environment:**
 ```bash
 cp .env.example .env
-# Edit .env with your database and API keys
+# Edit .env with your database and API keys (see LLM Setup above)
 ```
 
 4. **Start backend server:**
@@ -85,6 +97,9 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    - Anon key: Found in Settings → API
 
 ## 📱 Usage
+
+- With `HF_API_KEY` set, queries call Hugging Face Inference API and return JSON.
+- Without the key, deterministic fallback is used for consistent demos.
 
 ### Basic Queries
 - **Text**: "When should I irrigate my wheat crop?"

@@ -1,16 +1,15 @@
 """
-LLM service for FarmGuru with OpenAI integration and deterministic fallback.
+LLM service for FarmGuru with Hugging Face Inference API integration and deterministic fallback.
 """
 import os
 import json
-import openai
 from typing import List, Dict, Any, Optional
+import httpx
 
 class LLMService:
     def __init__(self):
-        self.openai_client = None
-        if os.getenv("OPENAI_API_KEY"):
-            self.openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.hf_api_key = os.getenv("HF_API_KEY")
+        self.hf_model_url = "https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct"
             
     async def synthesize(self, question: str, docs: List[Dict[str, Any]], agent_hint: str = "general") -> Dict[str, Any]:
         """Synthesize answer from retrieved documents"""
@@ -33,15 +32,15 @@ class LLMService:
         full_prompt = prompt_template.replace("<<USER_QUESTION>>", question)
         full_prompt += f"\nRetrieved docs:\n{doc_text}\n\nReturn only JSON."
         
-        # Try OpenAI first, then fallback
-        if self.openai_client:
+        # Try Hugging Face first, then deterministic fallback
+        if self.hf_api_key:
             try:
-                response = await self._call_openai(full_prompt)
-                parsed_response = self._parse_and_validate_response(response, docs, agent_hint)
+                response_text = await self._call_hf(full_prompt)
+                parsed_response = self._parse_and_validate_response(response_text, docs, agent_hint)
                 if parsed_response:
                     return parsed_response
             except Exception as e:
-                print(f"OpenAI API error: {e}")
+                print(f"Hugging Face API error: {e}")
                 
         # Deterministic fallback
         return self._deterministic_fallback(question, docs, agent_hint)
@@ -67,19 +66,33 @@ User question: <<USER_QUESTION>>"""
             
         return "\n\n".join(formatted_docs)
         
-    async def _call_openai(self, prompt: str) -> str:
-        """Call OpenAI API"""
-        response = await self.openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are FarmGuru, an agricultural assistant. Always return valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.0,
-            max_tokens=1000
-        )
-        
-        return response.choices[0].message.content
+    async def _call_hf(self, prompt: str) -> str:
+        """Call Hugging Face Inference API for text generation"""
+        headers = {
+            "Authorization": f"Bearer {self.hf_api_key}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "inputs": prompt,
+            "parameters": {"max_new_tokens": 256}
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(self.hf_model_url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                raise RuntimeError(f"HF Inference API error: {resp.status_code} {resp.text}")
+            data = resp.json()
+            # Typical HF Inference returns a list with {"generated_text": ...}
+            if isinstance(data, list) and len(data) > 0:
+                generated = data[0].get("generated_text")
+                if not generated:
+                    # Some hosted models might return dict with different key
+                    generated = data[0].get("summary_text") or json.dumps(data)
+                return generated
+            elif isinstance(data, dict):
+                return data.get("generated_text", json.dumps(data))
+            else:
+                raise ValueError("Unexpected HF response format")
         
     def _parse_and_validate_response(self, response: str, docs: List[Dict[str, Any]], agent_hint: str) -> Optional[Dict[str, Any]]:
         """Parse and validate LLM response"""
@@ -111,36 +124,30 @@ User question: <<USER_QUESTION>>"""
             return None
             
     def _deterministic_fallback(self, question: str, docs: List[Dict[str, Any]], agent_hint: str) -> Dict[str, Any]:
-        """Deterministic fallback when OpenAI is not available"""
-        # Simple rule-based response generation
-        if not docs:
-            answer = "I don't know — please consult a local expert."
-            confidence = 0.0
-            actions = ["Consult local agricultural extension officer"]
+        """Deterministic fallback when HF API is not available"""
+        # Concatenate small snippets for context
+        snippets = [doc.get('content', '')[:150] for doc in docs[:2]]
+        combined_content = " ".join(snippets).strip()
+        
+        # Short 1–2 sentence conservative answer
+        if any(k in question.lower() for k in ['water', 'irrigat', 'rain']):
+            answer = "Check soil moisture at 2–3 inch depth and consider current rainfall before irrigating."
+            actions = ["Check soil moisture", "Review local forecast"]
+        elif any(k in question.lower() for k in ['pest', 'disease', 'bug']):
+            answer = "Use Integrated Pest Management (IPM) practices and consult local experts for specific guidance."
+            actions = ["Remove affected parts", "Consult KVK expert"]
+        elif any(k in question.lower() for k in ['fertilizer', 'nutrient']):
+            answer = "Do a soil test first and apply a balanced fertilizer as recommended by local guidelines."
+            actions = ["Get soil test", "Follow local guidance"]
         else:
-            # Concatenate top snippets
-            snippets = [doc.get('content', '')[:200] for doc in docs[:2]]
-            combined_content = " ".join(snippets)
-            
-            # Generate conservative answer based on content
-            if any(keyword in question.lower() for keyword in ['water', 'irrigat', 'rain']):
-                answer = "Check soil moisture at 2-3 inch depth before watering."
-                actions = ["Check soil moisture", "Monitor weather forecast", "Water early morning if needed"]
-                confidence = 0.7
-            elif any(keyword in question.lower() for keyword in ['pest', 'disease', 'bug']):
-                answer = "Consider Integrated Pest Management (IPM) approaches and consult local experts."
-                actions = ["Remove affected plant parts", "Use neem-based treatments", "Consult KVK expert"]
-                confidence = 0.5
-            elif any(keyword in question.lower() for keyword in ['fertilizer', 'nutrient']):
-                answer = "Conduct soil test first, then apply balanced fertilizers as recommended."
-                actions = ["Get soil test done", "Apply in morning", "Follow recommended dosage"]
-                confidence = 0.6
-            else:
-                answer = combined_content[:100] + "... Please consult local experts for specific guidance."
-                actions = ["Consult agricultural extension officer", "Visit nearest KVK"]
-                confidence = 0.4
-                
-        # Format sources
+            base = combined_content[:160] if combined_content else "Information is limited."
+            answer = f"{base} Please consult local experts for specific advice."
+            actions = ["Consult agricultural officer"]
+        
+        # Fixed confidence per requirement
+        confidence = 0.5
+        
+        # Format sources = retrieved docs
         sources = []
         for doc in docs:
             sources.append({
@@ -152,7 +159,7 @@ User question: <<USER_QUESTION>>"""
         return {
             "answer": answer,
             "confidence": confidence,
-            "actions": actions,
+            "actions": actions[:2],  # ensure 1–2 actions
             "sources": sources,
             "meta": {
                 "agent": agent_hint,
